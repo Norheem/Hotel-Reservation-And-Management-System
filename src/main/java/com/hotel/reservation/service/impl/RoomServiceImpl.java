@@ -1,6 +1,8 @@
 package com.hotel.reservation.service.impl;
 
+import com.hotel.reservation.entity.Reservation;
 import com.hotel.reservation.entity.Room;
+import com.hotel.reservation.entity.enums.ReservationStatus;
 import com.hotel.reservation.entity.enums.RoomStatus;
 import com.hotel.reservation.entity.enums.RoomType;
 import com.hotel.reservation.exception.customExceptions.RoomAlreadyExistsException;
@@ -69,15 +71,6 @@ public class RoomServiceImpl implements RoomService {
         roomRepository.delete(room);
     }
 
-//    @Override
-//    public String deleteRoom(Long roomId) {
-//        if (!roomRepository.existsById(roomId)) {
-//            throw new RoomNotFoundException("Room not found.");
-//        }
-//        roomRepository.deleteById(roomId);
-//
-//        return "Room with ID " + roomId +" has been deleted successfully.";
-//    }
 
     @Override
     public RoomResponse getRoomById(Long roomId) {
@@ -108,50 +101,52 @@ public class RoomServiceImpl implements RoomService {
                 .collect(Collectors.toList());
     }
 
-    @Override
-    public List<Room> getAvailableRooms(LocalDate checkIn, LocalDate checkOut) {
-        List<Room> rooms = roomRepository.findAvailableRooms(checkIn, checkOut);
+//    @Override
+//    public List<Room> getAvailableRooms(LocalDate checkIn, LocalDate checkOut) {
+//        List<Room> rooms = roomRepository.findAvailableRooms(checkIn, checkOut);
+//
+//        if (rooms.isEmpty()) {
+//            throw new RoomUnavailableException("No rooms available for selected dates. Try another date.");
+//        }
+//
+//        return rooms;
+//    }
 
-        if (rooms.isEmpty()) {
-            throw new RoomUnavailableException("No rooms available for selected dates. Try another date.");
+    @Override
+    public List<RoomInfo> searchAvailableRooms(LocalDate checkIn, LocalDate checkOut, RoomType roomType) {
+        List<Room> rooms = (roomType != null)
+                ? roomRepository.findByRoomType(roomType)
+                : roomRepository.findAll();
+
+        // Filter out rooms that are booked between the given dates
+        List<Room> availableRooms = rooms.stream()
+                .filter(room -> isRoomAvailable(room, checkIn, checkOut))
+                .collect(Collectors.toList());
+
+        if (availableRooms.isEmpty()) {
+            throw new RoomUnavailableException("No rooms available for the selected dates.");
         }
 
-        return rooms;
+        return availableRooms.stream()
+                .map(this::mapToRoomInfo)
+                .collect(Collectors.toList());
     }
 
-
-//    @Override
-//    public boolean isRoomAvailable(Long roomId, LocalDate checkIn, LocalDate checkOut) {
-//        List<Reservation> existingReservations = reservationRepository.findReservationsByRoomIdAndDateRange(roomId, checkIn, checkOut);
-//
-//        System.out.println("🔍 Checking availability for Room " + roomId);
-//        System.out.println("➡️ Check-In: " + checkIn + " | Check-Out: " + checkOut);
-//        System.out.println("🔎 Found " + existingReservations.size() + " reservations");
-//
-//
-//        for (Reservation res : existingReservations) {
-//            System.out.println("🚨 Reserved from: " + res.getCheckIn() + " to " + res.getCheckOut());
-//        }
-//
-//
-//        if (existingReservations.isEmpty()) {
-//            return true;
-//        } else {
-//            LocalDate nextAvailableDate = existingReservations.stream()
-//                    .map(Reservation::getCheckOut)
-//                    .max(LocalDate::compareTo)
-//                    .orElse(checkOut)
-//                    .plusDays(1); // Available the next day after the last check-out
-//
-//            throw new RoomOccupiedException("Room is currently occupied. It will be available on " + nextAvailableDate);
-//        }
-//    }
+    private boolean isRoomAvailable(Room room, LocalDate checkIn, LocalDate checkOut) {
+        List<Reservation> reservations = reservationRepository.findByRoomIdAndStatusIn(
+                room.getId(),
+                List.of(ReservationStatus.BOOKED, ReservationStatus.OCCUPIED)
+        );
 
 
+        for (Reservation reservation : reservations) {
+            if (!(checkOut.isBefore(reservation.getCheckInDate()) || checkIn.isAfter(reservation.getCheckOutDate()))) {
+                return false;
+            }
+        }
 
-//    public boolean isRoomAvailable(Long roomId, LocalDate checkIn, LocalDate checkOut) {
-//        return roomRepository.countOverlappingReservations(roomId, checkIn, checkOut) == 0;
-//    }
+        return true;
+    }
 
 
     private RoomInfo mapToRoomInfo(Room room) {

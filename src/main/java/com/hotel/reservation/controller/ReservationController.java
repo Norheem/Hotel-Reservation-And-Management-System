@@ -1,13 +1,16 @@
 package com.hotel.reservation.controller;
 
-import com.hotel.reservation.entity.Room;
 import com.hotel.reservation.entity.User;
 import com.hotel.reservation.payload.request.ReservationRequest;
+import com.hotel.reservation.payload.request.RoomSearchRequest;
 import com.hotel.reservation.payload.response.ReservationInfo;
 import com.hotel.reservation.payload.response.ReservationResponse;
+import com.hotel.reservation.payload.response.RoomInfo;
+import com.hotel.reservation.service.ReservationCleanupService;
 import com.hotel.reservation.service.ReservationService;
 import com.hotel.reservation.service.RoomService;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
@@ -23,6 +26,8 @@ public class ReservationController {
     private final ReservationService reservationService;
 
     private final RoomService roomService;
+
+    private final ReservationCleanupService reservationCleanupService;
 
     @PostMapping("/book")
     public ResponseEntity<ReservationInfo> createReservation(@AuthenticationPrincipal User user,
@@ -60,10 +65,11 @@ public class ReservationController {
     }
 
     @GetMapping("/available")
-    public ResponseEntity<List<Room>> getAvailableRooms(
+    public ResponseEntity<List<RoomInfo>> getAvailableRooms(
             @RequestParam("checkIn") LocalDate checkIn,
             @RequestParam("checkOut") LocalDate checkOut) {
-        return ResponseEntity.ok(roomService.getAvailableRooms(checkIn, checkOut));
+        List<RoomInfo> availableRooms = roomService.searchAvailableRooms(checkIn, checkOut, null);
+        return ResponseEntity.ok(availableRooms);
     }
 
     @PostMapping("/checkout/{reservationId}")
@@ -76,22 +82,25 @@ public class ReservationController {
         }
     }
 
+    @PostMapping("/search")
+    public ResponseEntity<List<RoomInfo>> searchAvailableRooms(@RequestBody RoomSearchRequest request) {
+        List<RoomInfo> availableRooms = roomService.searchAvailableRooms(
+                request.getCheckIn(),
+                request.getCheckOut(),
+                request.getRoomType()
+        );
+        return ResponseEntity.ok(availableRooms);
+    }
 
+    @PostMapping("/cleanup")
+    public ResponseEntity<String> triggerCleanup(@RequestParam(required = false) String key) {
+        if (key != null && !key.equals("YOUR_SECRET_KEY")) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body("Invalid key");
+        }
 
-//
-//    @GetMapping("/availability")
-//    public ResponseEntity<?> checkRoomAvailability(
-//            @RequestParam Long roomId,
-//            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate checkIn,
-//            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate checkOut) {
-//        try {
-//            boolean isAvailable = roomService.isRoomAvailable(roomId, checkIn, checkOut);
-//            return ResponseEntity.ok(Collections.singletonMap("available", isAvailable));
-//        } catch (RoomOccupiedException e) {
-//            return ResponseEntity.status(HttpStatus.CONFLICT)
-//                    .body(Collections.singletonMap("message", e.getMessage()));
-//        }
-//    }
+        reservationCleanupService.cancelUnpaidReservationsAfter12Hours();
+        return ResponseEntity.ok("Reservation cleanup task executed.");
+    }
 
 
 }

@@ -22,6 +22,7 @@ import com.hotel.reservation.repository.UserRepository;
 import com.hotel.reservation.service.EmailService;
 import com.hotel.reservation.service.PayPalService;
 import com.hotel.reservation.service.ReservationService;
+import com.hotel.reservation.service.RoomService;
 import com.hotel.reservation.utils.AccountUtils;
 import com.paypal.base.rest.PayPalRESTException;
 import jakarta.transaction.Transactional;
@@ -47,10 +48,11 @@ public class ReservationServiceImpl implements ReservationService {
 
     private final PaymentRepository paymentRepository;
 
-
     private final EmailService emailService;
 
     private final PayPalService payPalService;
+
+    private final RoomService roomService;
 
 
     @Transactional
@@ -60,84 +62,74 @@ public class ReservationServiceImpl implements ReservationService {
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new RuntimeException("User not found with id: " + userId));
 
-        List<Room> availableRooms = roomRepository.findByRoomTypeAndRoomStatus(request.getRoomType(), RoomStatus.AVAILABLE);
 
-        if (availableRooms.isEmpty()) {
-            List<Room> alternativeRooms = roomRepository.findByRoomStatus(RoomStatus.AVAILABLE);
+        List<RoomInfo> availableRoomInfos = roomService.searchAvailableRooms(
+                request.getCheckIn(), request.getCheckOut(), request.getRoomType()
+        );
+
+        if (availableRoomInfos.isEmpty()) {
+            List<RoomInfo> alternativeRooms = roomService.searchAvailableRooms(
+                            request.getCheckIn(), request.getCheckOut(), null
+                    );
 
             if (alternativeRooms.isEmpty()) {
-                throw new RoomNotFoundException("No available " + request.getRoomType() + " rooms at the moment.");
+                throw new RoomUnavailableException("No available " + request.getRoomType() + " rooms at the moment.");
             }
-
-            List<AlternativeRoomDto> alternatives = alternativeRooms.stream()
-                    .map(room -> new AlternativeRoomDto(
-                            room.getRoomNumber(),
-                            room.getRoomType().name(), // assuming enum
-                            room.getPrice()
-                    ))
-                    .collect(Collectors.toList());
-
-            String message = "Requested room type '" + request.getRoomType() + "' is not available. Here are some alternatives:";
-
 
             StringBuilder suggestions = new StringBuilder("Requested room type '")
                     .append(request.getRoomType())
                     .append("' is not available. Here are some alternatives:\n\n");
 
+
             int count = 1;
-            for (Room altRoom : alternativeRooms) {
-                suggestions.append(count).append(". Room Number: ").append(altRoom.getRoomNumber()).append("\n")
-                        .append(", Room Type: ").append(altRoom.getRoomType()).append("\n")
-                        .append(", Price: ").append(altRoom.getPrice()).append("\n\n");
-                count++;
+            for (RoomInfo alt : alternativeRooms) {
+                suggestions.append(count++).append(". Room Number: ").append(alt.getRoomNumber()).append("\n")
+                        .append("Room Number: ").append(alt.getRoomNumber()).append("\n")
+                        .append("Room Type: ").append(alt.getRoomType()).append("\n")
+                        .append("Price: $").append(alt.getPrice()).append("\n\n");
             }
 
             throw new RoomUnavailableException(suggestions.toString());
-
         }
 
-        Room room = availableRooms.get(0);
-
-
-        if (!isRoomAvailable(request.getCheckIn(), request.getCheckOut(), room.getId())) {
-            throw new RoomUnavailableException("Room is not available for selected dates.");
-        }
+        Room room = roomRepository.findById(availableRoomInfos.get(0).getRoomId())
+                .orElseThrow(() -> new RoomNotFoundException("Room not found"));
 
         BigDecimal totalPrice = calculateTotalPrice(room, request.getCheckIn(), request.getCheckOut());
 
-        PaymentMethod method = request.getPaymentMethod() != null ? request.getPaymentMethod() : PaymentMethod.CASH;
-
         Reservation reservation = Reservation.builder()
                 .reservationCode(UUID.randomUUID().toString())
-                .checkIn(request.getCheckIn())
-                .checkOut(request.getCheckOut())
+                .checkInDate(request.getCheckIn())
+                .checkOutDate(request.getCheckOut())
                 .totalPrice(totalPrice)
                 .reservationStatus(ReservationStatus.BOOKED)
                 .user(user)
                 .room(room)
                 .build();
 
-        Reservation savedReservation = reservationRepository.save(reservation);
+        reservation = reservationRepository.save(reservation);
 
+        PaymentMethod method = request.getPaymentMethod() != null ? request.getPaymentMethod() : PaymentMethod.CASH;
         Payment payment = Payment.builder()
                 .paymentDate(LocalDate.now())
                 .amount(totalPrice)
                 .paymentMethod(method)
                 .paymentStatus(PaymentStatus.PENDING)
-                .reservation(savedReservation)
+                .reservation(reservation)
                 .build();
 
-        Payment savedPayment = paymentRepository.save(payment);
+        payment = paymentRepository.save(payment);
 
+        reservation.setPayment(payment);
+        reservationRepository.save(reservation);
 
         boolean isPaymentSuccessful = false;
 
         try {
             double formattedTotal = totalPrice.doubleValue();
 
-            // Create the PayPal request object
             PayPalRequest payPalRequest = PayPalRequest.builder()
-                    .total(formattedTotal)  // Use the calculated total
+                    .total(formattedTotal)
                     .currency("USD")
                     .method("paypal")
                     .intent("sale")
@@ -146,34 +138,28 @@ public class ReservationServiceImpl implements ReservationService {
                     .successUrl("http://localhost:8080/api/v1/reservation/success")
                     .build();
 
-            PaymentResponse paymentResponse = payPalService.createPayment(payPalRequest, savedReservation.getId());
+            PaymentResponse paymentResponse = payPalService.createPayment(payPalRequest, reservation.getId());
 
             isPaymentSuccessful = paymentResponse.getPaymentInfo().getApprovalLink() != null;
-            if (isPaymentSuccessful) {
-                System.out.println("Redirect to: " + paymentResponse.getPaymentInfo().getApprovalLink());
-            }
-
         } catch (PayPalRESTException e) {
             e.printStackTrace();
             System.err.println("Payment failed: " + e.getMessage());
         }
 
         if (!isPaymentSuccessful) {
-            savedPayment.setPaymentStatus(PaymentStatus.FAILED);
-            paymentRepository.save(savedPayment);
+            payment.setPaymentStatus(PaymentStatus.FAILED);
+            paymentRepository.save(payment);
             throw new PaymentFailedException("Payment failed, reservation not completed.");
         }
 
-        savedPayment.setPaymentStatus(PaymentStatus.COMPLETED);
-        paymentRepository.save(savedPayment);
-
-        savedReservation.setReservationStatus(ReservationStatus.BOOKED);
-        reservationRepository.save(savedReservation);
+        payment.setPaymentStatus(PaymentStatus.COMPLETED);
+        paymentRepository.save(payment);
 
         room.setRoomStatus(RoomStatus.BOOKED);
         roomRepository.save(room);
 
-        return mapToReservationResponse(savedReservation);
+        return mapToReservationResponse(reservation);
+
     }
 
     @Override
@@ -225,8 +211,8 @@ public class ReservationServiceImpl implements ReservationService {
         }
 
         BigDecimal totalPrice = calculateTotalPrice(newRoom, request.getCheckIn(), request.getCheckOut());
-        reservation.setCheckIn(request.getCheckIn());
-        reservation.setCheckOut(request.getCheckOut());
+        reservation.setCheckInDate(request.getCheckIn());
+        reservation.setCheckOutDate(request.getCheckOut());
         reservation.setTotalPrice(totalPrice);
         reservation.setRoom(newRoom);
 
@@ -247,8 +233,8 @@ public class ReservationServiceImpl implements ReservationService {
                 .map(reservation -> new ReservationInfo(
                         reservation.getId(),
                         reservation.getReservationCode(),
-                        reservation.getCheckIn(),
-                        reservation.getCheckOut(),
+                        reservation.getCheckInDate(),
+                        reservation.getCheckOutDate(),
                         reservation.getTotalPrice(),
                         reservation.getReservationStatus(),
                         reservation.getUser().getId(),
@@ -316,8 +302,8 @@ public class ReservationServiceImpl implements ReservationService {
                         "Best regards,\nRoomify Team",
                 user.getFirstName(),
                 reservation.getReservationCode(),
-                reservation.getCheckIn(),
-                reservation.getCheckOut(),
+                reservation.getCheckInDate(),
+                reservation.getCheckOutDate(),
                 reservation.getRoom().getRoomType(),
                 payment.getAmount()
         );
@@ -344,8 +330,8 @@ public class ReservationServiceImpl implements ReservationService {
                 .reservationInfo(ReservationInfo.builder()
                         .reservationId(reservation.getId())
                         .reservationCode(reservation.getReservationCode())
-                        .checkIn(reservation.getCheckIn())
-                        .checkOut(reservation.getCheckOut())
+                        .checkIn(reservation.getCheckInDate())
+                        .checkOut(reservation.getCheckOutDate())
                         .totalPrice(reservation.getTotalPrice())
                         .reservationStatus(reservation.getReservationStatus())
                         .customerId(reservation.getUser().getId())

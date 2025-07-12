@@ -38,7 +38,7 @@ public class PayPalServiceImpl implements PayPalService {
 
             Room room = reservation.getRoom();
 
-            long days = ChronoUnit.DAYS.between(reservation.getCheckIn(), reservation.getCheckOut());
+            long days = ChronoUnit.DAYS.between(reservation.getCheckInDate(), reservation.getCheckOutDate());
             BigDecimal totalPrice = room.getPrice().multiply(BigDecimal.valueOf(days));
 
             String formattedTotal = String.format(Locale.forLanguageTag(payPalRequest.getCurrency()), "%.2f", totalPrice);

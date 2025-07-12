@@ -25,10 +25,10 @@ import java.time.LocalDateTime;
         private String reservationCode;
 
         @Column(nullable = false)
-        private LocalDate checkIn;
+        private LocalDate checkInDate;
 
         @Column(nullable = false)
-        private LocalDate checkOut;
+        private LocalDate checkOutDate;
 
         @Column(nullable = false)
         @Positive
@@ -39,6 +39,7 @@ import java.time.LocalDateTime;
         private ReservationStatus reservationStatus;
 
         @CreationTimestamp
+        @Column(updatable = false)
         private LocalDateTime createdAt;
 
         @UpdateTimestamp
@@ -51,4 +52,8 @@ import java.time.LocalDateTime;
         @ManyToOne(fetch = FetchType.LAZY)
         @JoinColumn(name = "room_id")
         private Room room;
-    }
+
+        @OneToOne(mappedBy = "reservation", cascade = CascadeType.ALL, fetch = FetchType.LAZY, orphanRemoval = true)
+        private Payment payment;
+
+}
