@@ -42,7 +42,7 @@ public class WebPushConfig implements WebMvcConfigurer {
          *          npm install -g web-push
          *              after than run:
          *          web-push generate-vapid-keys
-         *  You key will be generated and display on the terminal
+         *  You key will be generated and display on the terminal copy it and paste it herea
          */
     }
 }
