@@ -18,7 +18,7 @@
 FROM maven:3.8.5-eclipse-temurin-17 AS build
 COPY . /workspace
 WORKDIR /workspace
-RUN mvn clean package -DskipTests  # ✅ Use mvn (not ./mvnw)
+RUN mvn clean package -DskipTests
 
 # -------- Run stage --------
 FROM eclipse-temurin:17-jdk-alpine
