@@ -104,7 +104,7 @@ jobs:
       - run: mvn --batch-mode --update-snapshots verify -DskipTests
       - run: mkdir staging && cp target/*.jar staging
 
-      - uses: actions/upload-artifact@v3
+      - uses: actions/upload-artifact@v4
         with:
           name: Package
           path: staging
